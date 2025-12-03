@@ -1,6 +1,6 @@
 {
   "name": "@wiki3-ai/webllm-chat-kernel",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "WebLLM chat kernel for JupyterLite using @built-in-ai/web-llm",
   "type": "module",
   "main": "dist/index.js",
@@ -14,7 +14,7 @@
     "build:package": "node -e \"const pkg = require('./package.json'); const fs = require('fs'); const out = {name: pkg.name, version: pkg.version, jupyterlab: {...pkg.jupyterlab, _build: {load: 'index.js', extension: './extension'}}}; fs.writeFileSync('dist/package.json', JSON.stringify(out, null, 2));\"",
     "build": "npm run build:labextension",
     "build:prod": "npm run build:labextension && npm run copy:labextension",
-    "copy:labextension": "mkdir -p labextension && cp -r dist/* labextension/ && cp install.json labextension/",
+    "copy:labextension": "mkdir -p labextension && cp -r dist/* labextension/ && cp install.json labextension/ && mkdir -p labextension/schemas/@wiki3-ai/webllm-chat-kernel && cp schema/plugin.json labextension/schemas/@wiki3-ai/webllm-chat-kernel/",
     "clean": "rm -rf lib dist labextension"
   },
   "dependencies": {
@@ -33,6 +33,7 @@
   "jupyterlab": {
     "extension": true,
     "outputDir": "labextension",
+    "schemaDir": "./schema",
     "sharedPackages": {
       "@jupyterlab/application": {
         "bundled": false,
@@ -43,6 +44,10 @@
         "singleton": true
       },
       "@jupyterlab/services": {
+        "bundled": false,
+        "singleton": true
+      },
+      "@jupyterlab/settingregistry": {
         "bundled": false,
         "singleton": true
       }

@@ -3,7 +3,7 @@
 
 import { streamText } from "ai";
 import { webLLM } from "@built-in-ai/web-llm";
-import { WEBLLM_MODELS, DEFAULT_WEBLLM_MODEL } from "./models.js";
+import { WEBLLM_MODELS, DEFAULT_WEBLLM_MODEL, isValidWebLLMModel } from "./models.js";
 
 declare const window: any;
 
@@ -11,6 +11,17 @@ console.log("[webllm-chat-kernel/federation] Setting up Module Federation contai
 
 const scope = "@wiki3-ai/webllm-chat-kernel";
 let sharedScope: any = null;
+
+// Module-level storage for the settings-based default model
+let settingsDefaultModel: string | null = null;
+
+/**
+ * Get the default model from settings, falling back to the hardcoded default.
+ * This is called when the kernel is first initialized.
+ */
+function getDefaultModel(): string {
+  return settingsDefaultModel ?? DEFAULT_WEBLLM_MODEL;
+}
 
 // Helper to get a module from the shared scope
 async function importShared(pkg: string): Promise<any> {
@@ -93,32 +104,24 @@ const container = {
 
         // Define WebLLM-backed Chat kernel inline (browser-only, no HTTP)
         class WebLLMChatKernel {
-          private modelName!: string;
-          private model!: ReturnType<typeof webLLM>;
-          private readonly initialModelOverride?: string;
+          private modelName: string | null = null;
+          private model: ReturnType<typeof webLLM> | null = null;
+          private initialized: boolean = false;
 
-          constructor(opts: any = {}) {
-            this.initialModelOverride = opts.model;
-            this.ensureModelUpToDate();
-            console.log("[WebLLMChatKernel] Using WebLLM model:", this.modelName);
+          constructor() {
+            // Model initialization is deferred until first send() call
+            console.log("[WebLLMChatKernel] Created (model initialization deferred until first execution)");
           }
 
           /**
-           * Ensure that this.model / this.modelName match the currently-selected model.
-           * This lets users change the dropdown without needing to reload the page.
+           * Initialize the model. Called on first send() or when explicitly setting a model.
            */
-          private ensureModelUpToDate() {
-            const globalModel =
-              typeof window !== "undefined" ? window.webllmModelId : undefined;
-
-            const targetName =
-              this.initialModelOverride ?? globalModel ?? DEFAULT_WEBLLM_MODEL;
-
-            if (this.model && this.modelName === targetName) {
-              return;
+          private initializeModel(modelName: string) {
+            if (!isValidWebLLMModel(modelName)) {
+              throw new Error(`Invalid model: ${modelName}. Use %ai model to see available models.`);
             }
-
-            this.modelName = targetName;
+            
+            this.modelName = modelName;
             this.model = webLLM(this.modelName, {
               initProgressCallback: (report) => {
                 if (typeof window !== "undefined") {
@@ -128,11 +131,51 @@ const container = {
                 }
               },
             });
+            this.initialized = true;
+            console.log("[WebLLMChatKernel] Initialized with model:", this.modelName);
+          }
+
+          /**
+           * Set or change the model. Can be called via %ai model magic.
+           * If the model is already initialized, this will reinitialize with the new model.
+           */
+          setModel(modelName: string): string {
+            if (!isValidWebLLMModel(modelName)) {
+              throw new Error(`Invalid model: ${modelName}`);
+            }
+            
+            const wasInitialized = this.initialized;
+            this.initializeModel(modelName);
+            
+            if (wasInitialized) {
+              return `Model changed to: ${modelName}`;
+            } else {
+              return `Model set to: ${modelName}`;
+            }
+          }
+
+          /**
+           * Get the current model name, or null if not yet initialized.
+           */
+          getModelName(): string | null {
+            return this.modelName;
+          }
+
+          /**
+           * Check if the model has been initialized.
+           */
+          isInitialized(): boolean {
+            return this.initialized;
           }
 
           async send(prompt: string, onChunk?: (chunk: string) => void): Promise<string> {
-            // Pick up any model change from the toolbar before each request
-            this.ensureModelUpToDate();
+            // Initialize model on first send if not already done
+            if (!this.initialized || !this.model) {
+              const defaultModel = getDefaultModel();
+              this.initializeModel(defaultModel);
+              console.log("[WebLLMChatKernel] Auto-initialized with settings default:", defaultModel);
+            }
+
             console.log(
               "[WebLLMChatKernel] Sending prompt to WebLLM:",
               prompt,
@@ -140,12 +183,12 @@ const container = {
               this.modelName
             );
 
-            const availability = await this.model.availability();
+            const availability = await this.model!.availability();
             if (availability === "unavailable") {
               throw new Error("Browser does not support WebLLM / WebGPU.");
             }
             if (availability === "downloadable" || availability === "downloading") {
-              await this.model.createSessionWithProgress((report) => {
+              await this.model!.createSessionWithProgress((report) => {
                 if (typeof window !== "undefined") {
                   window.dispatchEvent(
                     new CustomEvent("webllm:model-progress", { detail: report })
@@ -155,7 +198,7 @@ const container = {
             }
 
             const result = await streamText({
-              model: this.model,
+              model: this.model!,
               messages: [{ role: "user", content: prompt }],
             });
 
@@ -178,13 +221,73 @@ const container = {
 
           constructor(options: any) {
             super(options);
-            const model = options.model;
-            this.chat = new WebLLMChatKernel({ model });
+            this.chat = new WebLLMChatKernel();
+          }
+
+          /**
+           * Handle %ai magic commands.
+           * Returns the response text if a magic was handled, or null if not a magic command.
+           */
+          private handleMagic(code: string): string | null {
+            const trimmed = code.trim();
+            
+            // %ai model [name] - show current model, list models, or set model
+            if (trimmed === "%ai model" || trimmed === "%ai models") {
+              const current = this.chat.getModelName();
+              const status = this.chat.isInitialized() 
+                ? `Current model: ${current}` 
+                : `Model not yet initialized. Default: ${getDefaultModel()}`;
+              const modelList = WEBLLM_MODELS.slice(0, 20).join("\n  ");
+              return `${status}\n\nAvailable models (showing first 20 of ${WEBLLM_MODELS.length}):\n  ${modelList}\n  ...\n\nUse "%ai model <name>" to switch models.`;
+            }
+            
+            const modelMatch = trimmed.match(/^%ai\s+model\s+(\S+)$/);
+            if (modelMatch) {
+              const modelName = modelMatch[1];
+              try {
+                const result = this.chat.setModel(modelName);
+                return result;
+              } catch (err: any) {
+                throw new Error(`${err.message}\n\nUse "%ai model" to see available models.`);
+              }
+            }
+            
+            // %ai help
+            if (trimmed === "%ai" || trimmed === "%ai help") {
+              return `WebLLM Chat Kernel Magic Commands:
+
+  %ai model          - Show current model and list available models
+  %ai model <name>   - Switch to a different model
+  %ai help           - Show this help message
+
+The model is initialized on first cell execution using the default from Settings.
+After initialization, use "%ai model <name>" to switch models.`;
+            }
+            
+            return null; // Not a magic command
           }
 
           async executeRequest(content: any): Promise<any> {
             const code = String(content.code ?? "");
             try {
+              // Check for magic commands first
+              const magicResult = this.handleMagic(code);
+              if (magicResult !== null) {
+                // @ts-ignore
+                this.stream(
+                  { name: "stdout", text: magicResult + "\n" },
+                  // @ts-ignore
+                  this.parentHeader
+                );
+                return {
+                  status: "ok",
+                  // @ts-ignore
+                  execution_count: this.executionCount,
+                  payload: [],
+                  user_expressions: {},
+                };
+              }
+
               // Stream each chunk as it arrives using the stream() method for stdout
               await this.chat.send(code, (chunk: string) => {
                 // @ts-ignore
@@ -277,18 +380,47 @@ const container = {
           async commMsg(_content: any): Promise<void> { }
           async commClose(_content: any): Promise<void> { }
         }
+        // Try to get ISettingRegistry from shared scope (optional)
+        let ISettingRegistry: any = null;
+        try {
+          const settingModule = await importShared('@jupyterlab/settingregistry');
+          ISettingRegistry = settingModule.ISettingRegistry;
+          console.log("[webllm-chat-kernel] Got ISettingRegistry from shared scope");
+        } catch (e) {
+          console.warn("[webllm-chat-kernel] ISettingRegistry not available, using defaults");
+        }
 
         // Define and return the plugin
         const webllmChatKernelPlugin = {
-          id: "webllm-chat-kernel:plugin",
+          id: "@wiki3-ai/webllm-chat-kernel:plugin",
           autoStart: true,
           // Match the official JupyterLite custom kernel pattern:
           // https://jupyterlite.readthedocs.io/en/latest/howto/extensions/kernel.html
           requires: [IKernelSpecs],
-          activate: (app: any, kernelspecs: any) => {
+          optional: ISettingRegistry ? [ISettingRegistry] : [],
+          activate: async (app: any, kernelspecs: any, settingRegistry?: any) => {
             console.log("[webllm-chat-kernel] ===== ACTIVATE FUNCTION CALLED =====");
             console.log("[webllm-chat-kernel] JupyterLab app:", app);
             console.log("[webllm-chat-kernel] kernelspecs service:", kernelspecs);
+            console.log("[webllm-chat-kernel] settingRegistry:", settingRegistry);
+
+            // Load settings if available
+            if (settingRegistry) {
+              try {
+                const settings = await settingRegistry.load("@wiki3-ai/webllm-chat-kernel:plugin");
+                const updateSettings = () => {
+                  const model = settings.get("defaultModel").composite as string;
+                  if (model && isValidWebLLMModel(model)) {
+                    settingsDefaultModel = model;
+                    console.log("[webllm-chat-kernel] Settings loaded, default model:", model);
+                  }
+                };
+                updateSettings();
+                settings.changed.connect(updateSettings);
+              } catch (e) {
+                console.warn("[webllm-chat-kernel] Failed to load settings:", e);
+              }
+            }
 
             if (!kernelspecs || typeof kernelspecs.register !== "function") {
               console.error("[webllm-chat-kernel] ERROR: kernelspecs.register not available!");
@@ -317,80 +449,19 @@ const container = {
               console.error("[webllm-chat-kernel] ===== REGISTRATION ERROR =====", error);
             }
 
-            if (typeof document !== "undefined") {
-              class WebLLMToolbarWidget extends ReactWidget {
-                constructor() {
-                  super();
-                  // Make this widget look like the cell-type widget at the toolbar-item level
-                  this.addClass("jp-Notebook-toolbarCellType");
-                  this.addClass("webllm-model-toolbar");
-                }
-            
-                render() {
-                  const saved =
-                    window.localStorage.getItem("webllm:modelId") ?? DEFAULT_WEBLLM_MODEL;
-                
-                  const handleChange = (event: React.ChangeEvent<HTMLSelectElement>) => {
-                    const value = event.target.value;
-                    if (!value) {
-                      return;
-                    }
-                    window.webllmModelId = value;
-                    window.localStorage.setItem("webllm:modelId", value);
-                  };
-                
-                  return React.createElement(
-                    HTMLSelect,
-                    {
-                      className: "jp-Notebook-toolbarCellTypeDropdown",
-                      defaultValue: saved,                // <- use defaultValue here
-                      onChange: handleChange,
-                      "aria-label": "WebLLM model",
-                      title: "Select the WebLLM model",
-                    },
-                    WEBLLM_MODELS.map((id) =>
-                      React.createElement("option", { key: id, value: id }, id)
-                    )
-                  );
-                }
-              }
-            
-              const webllmToolbarExtension = {
-                createNew: (panel: any) => {
-                  const widget = new WebLLMToolbarWidget();
-            
-                  // Position relative to other items; tweak index as desired
-                  panel.toolbar.insertItem(10, "webllmModel", widget);
-            
-                  return widget;
-                },
-              };
-            
-              app.docRegistry.addWidgetExtension("Notebook", webllmToolbarExtension);
-            
-              // Progress text updates stay the same
+            // Log model download progress to console
+            if (typeof window !== "undefined") {
               window.addEventListener("webllm:model-progress", (ev: any) => {
                 const { progress: p, text } = ev.detail;
-                const labels = document.querySelectorAll(
-                  ".webllm-model-toolbar .jp-Notebook-toolbarCellTypeDropdown"
-                ) as NodeListOf<HTMLSelectElement>;
-            
                 const suffix =
                   typeof p === "number" && p > 0 && p < 1
                     ? ` ${Math.round(p * 100)}%`
                     : p === 1
                     ? " ready"
                     : "";
-            
-                // Here I’m updating the <select> title, not the visible text (since options are the models).
-                labels.forEach((el) => {
-                  el.title = text ? `${text}${suffix}` : `WebLLM${suffix}`;
-                });
+                console.log(`[webllm-chat-kernel] ${text || "Loading"}${suffix}`);
               });
             }
-            
-      
-      
           },
         };
 

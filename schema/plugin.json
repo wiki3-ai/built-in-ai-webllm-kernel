@@ -1,0 +1,14 @@
+{
+  "title": "WebLLM Chat Kernel",
+  "description": "Settings for the WebLLM Chat Kernel",
+  "type": "object",
+  "properties": {
+    "defaultModel": {
+      "type": "string",
+      "title": "Default Model",
+      "description": "The WebLLM model to use when the kernel is first initialized. Once a cell is executed, the model is locked and can only be changed using the %ai model <name> magic command.",
+      "default": "SmolLM2-360M-Instruct-q4f16_1-MLC"
+    }
+  },
+  "additionalProperties": false
+}
