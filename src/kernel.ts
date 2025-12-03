@@ -1,21 +1,21 @@
-// lite-kernel/src/kernel.ts
+// src/kernel.ts
 import { BaseKernel, IKernel } from "@jupyterlite/kernel";
-import { ChatHttpKernel } from "./ChatHttpKernel.js";
+import { WebLLMChatKernel } from "./WebLLMChatKernel.js";
 
 type KernelOptions = IKernel.IOptions & {
   /**
-   * Optional WebLLM model identifier to pass through to ChatHttpKernel.
+   * Optional WebLLM model identifier to pass through to WebLLMChatKernel.
    */
   model?: string;
 };
 
-export class HttpLiteKernel extends BaseKernel {
-  private chat: ChatHttpKernel;
+export class WebLLMLiteKernel extends BaseKernel {
+  private chat: WebLLMChatKernel;
 
   constructor(options: KernelOptions) {
     super(options);
     const model = options.model;
-    this.chat = new ChatHttpKernel({ model });
+    this.chat = new WebLLMChatKernel({ model });
   }
 
   async executeRequest(content: any): Promise<any> {
@@ -126,6 +126,6 @@ export class HttpLiteKernel extends BaseKernel {
   async commClose(_content: any): Promise<void> {}
 }
 
-export function createHttpLiteKernel(options: KernelOptions): IKernel {
-  return new HttpLiteKernel(options);
+export function createWebLLMLiteKernel(options: KernelOptions): IKernel {
+  return new WebLLMLiteKernel(options);
 }

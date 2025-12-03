@@ -1,7 +1,7 @@
 import { JupyterFrontEnd, JupyterFrontEndPlugin } from "@jupyterlab/application";
 import { WEBLLM_MODELS, DEFAULT_WEBLLM_MODEL } from "./models.js";
 
-import { HttpLiteKernel } from "./kernel.js";
+import { WebLLMLiteKernel } from "./kernel.js";
 
 console.log("[webllm-chat-kernel] entrypoint loaded");
 
@@ -45,8 +45,8 @@ const httpChatKernelPlugin: JupyterFrontEndPlugin<void> = {
         resources: {}
       },
       create: (options: any) => {
-        console.log("[webllm-chat-kernel] Creating HttpLiteKernel instance", options);
-        return new HttpLiteKernel(options);
+        console.log("[webllm-chat-kernel] Creating WebLLMLiteKernel instance", options);
+        return new WebLLMLiteKernel(options);
       }
     });
 
@@ -82,7 +82,7 @@ const httpChatKernelPlugin: JupyterFrontEndPlugin<void> = {
         if (id === saved) opt.selected = true;
         select.appendChild(opt);
       });
-      // expose current model globally so ChatHttpKernel can read it
+      // expose current model globally so WebLLMChatKernel can read it
       window.webllmModelId = saved;
       select.onchange = () => {
         window.webllmModelId = select.value;
